@@ -1,6 +1,10 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+import json
+import os
+from datetime import datetime
+from pydantic import BaseModel# FASTAPI standard for data validation
 import asyncio
 
 from Kbot import ResearchBot, GeminiProvider, DuckDuckGoSearchProvider
@@ -25,3 +29,39 @@ async def ask(question: str):
     
     # FIX: Return the result directly. FastAPI converts dict to JSON automatically.
     return result
+
+# 1. Define the Data Model
+class FeedbackModel(BaseModel):
+    rating: int
+    comment: str
+    
+# 2. The Feedback Endpoint
+@app.post("/api/feedback")
+async def submit_feedback(feedback: FeedbackModel):
+    file_path = "feedback.json"
+    
+    # Prepare the new entry with a timestamp
+    new_entry = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "rating": feedback.rating,
+        "comment": feedback.comment,
+        "status": "pending" # You can change this to "done" later manually
+    }
+    
+    # Load existing data or create empty list
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                data = []
+    else:
+        data = []
+        
+    # Append and Save
+    data.append(new_entry)
+    
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4) # indent=4 makes it readable like a list
+        
+    return {"message": "Feedback received!"}

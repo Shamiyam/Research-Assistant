@@ -67,5 +67,84 @@ async function sendMessage() {
 }
 </script>
 
+<button id="feedbackBtn" class="feedback-trigger" onclick="openModal()">
+    💬 Feedback
+</button>
+
+<div id="feedbackModal" class="modal">
+    <div class="modal-content">
+        <span class="close-btn" onclick="closeModal()">&times;</span>
+        <h3>Help us improve!</h3>
+        <p>What should we fix or add next?</p>
+        
+        <select id="fbRating">
+            <option value="5">⭐⭐⭐⭐⭐ (Excellent)</option>
+            <option value="4">⭐⭐⭐⭐ (Good)</option>
+            <option value="3">⭐⭐⭐ (Average)</option>
+            <option value="2">⭐⭐ (Poor)</option>
+            <option value="1">⭐ (Terrible)</option>
+        </select>
+
+        <textarea id="fbComment" placeholder="Describe the bug or feature request here..."></textarea>
+        
+        <button onclick="submitFeedback()">Submit Feedback</button>
+        <div id="fbStatus"></div>
+    </div>
+</div>
+
+<script>
+    const modal = document.getElementById("feedbackModal");
+
+    function openModal() {
+        modal.style.display = "flex";
+    }
+
+    function closeModal() {
+        modal.style.display = "none";
+        document.getElementById("fbStatus").textContent = "";
+    }
+
+    // Close if user clicks outside the box
+    window.onclick = function(event) {
+        if (event.target == modal) {
+            closeModal();
+        }
+    }
+
+    async function submitFeedback() {
+        const rating = document.getElementById("fbRating").value;
+        const comment = document.getElementById("fbComment").value;
+        const statusDiv = document.getElementById("fbStatus");
+
+        if (!comment) {
+            statusDiv.textContent = "Please write a comment.";
+            statusDiv.style.color = "red";
+            return;
+        }
+
+        statusDiv.textContent = "Sending...";
+
+        try {
+            const res = await fetch('/api/feedback', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rating: parseInt(rating), comment: comment })
+            });
+
+            if (res.ok) {
+                statusDiv.textContent = "Thank you! Saved.";
+                statusDiv.style.color = "#4caf50";
+                setTimeout(closeModal, 2000); // Close automatically after 2s
+                document.getElementById("fbComment").value = ""; // Clear form
+            } else {
+                statusDiv.textContent = "Error sending feedback.";
+            }
+        } catch (e) {
+            console.error(e);
+            statusDiv.textContent = "Network Error.";
+        }
+    }
+</script>
+
 </body>
 </html>
