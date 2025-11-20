@@ -11,7 +11,7 @@ A free, open-source research assistant using Google's Gemini AI and web search.
 1. Get a free Google API key from: https://makersuite.google.com/app/apikey
 2. Install dependencies:
    ```bash
-   pip install google-generativeai googlesearch-python click python-dotenv
+   pip install google-generativeai googlesearch-python click python-dotenv duckduckgo-search trafilatura
 
 3. Set environment variable-
 export GOOGLE_API_KEY="your_google_api_key"

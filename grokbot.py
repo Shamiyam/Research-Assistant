@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import click
 from dotenv import load_dotenv
 import trafilatura
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 
 # Google APIs and web scraping
 try:
@@ -74,20 +74,29 @@ class GeminiProvider(LLMProvider):
         
         genai.configure(api_key=self.api_key)
         
-        # Use the correct model name
-        self.model_name = 'gemini-1.5-flash'  # Updated model name
-        try:
-            self.model = genai.GenerativeModel(self.model_name)
-            print(f"✅ Using model: {self.model_name}")
-        except Exception as e:
-            print(f"❌ Model {self.model_name} failed: {e}")
-            # Try alternative model names
+        possible_models = [
+                
+                'gemini-2.5-flash',          # Latest stable: Fast, intelligent, multimodal (recommended for most)
+                'gemini-2.5-flash-lite',     # Ultra-fast, cost-efficient
+                'gemini-2.0-flash',          # Second-gen workhorse, 1M tokens
+                'gemini-2.0-flash-lite',     # Low-latency variant
+                'gemini-2.5-pro',            # Advanced reasoning (if you need deeper synthesis)
+                'gemini-2.0-flash-001',      # Tuned stable release (fallback)
+                'gemini-1.5-pro-latest'      # Last 1.x resort (if API still supports)
+                
+            ]
+        self.model = None
+        for model_name in possible_models:
             try:
-                self.model_name = 'models/gemini-pro'
-                self.model = genai.GenerativeModel(self.model_name)
+                self.model = genai.GenerativeModel(model_name)
+                self.model_name = model_name
                 print(f"✅ Using model: {self.model_name}")
-            except:
-                raise ValueError("No working Gemini model found")
+                break
+            except Exception as e:
+                print(f"⚠️ Model {model_name} failed: {e}")
+                continue
+        if not self.model:
+            raise ValueError("No working Gemini model found. Check API key/version.")    
     
     async def generate_content(self, prompt: str) -> str:
         try:
@@ -115,9 +124,9 @@ class GeminiProvider(LLMProvider):
                 prompt,
                 safety_settings=safety_settings,
                 generation_config=genai.types.GenerationConfig(
-                    temperature=0.1,
-                    top_p=0.8,
-                    top_k=40,
+                    temperature=0.3,
+                    top_p=0.95,
+                    top_k=50,
                 )
             )
             
@@ -181,8 +190,7 @@ class WebContentExtractor(ContentExtractor):
             
             # Extract the MAIN TEXT only (ignores headers, footers, menus)
             # include_comments=False removes user comments which are often garbage
-            text = trafilatura.extract(downloaded, include_comments=False, include_tables=False, no_fallback=True)
-            
+            text = trafilatura.extract(downloaded, include_comments=False, include_tables=False, favor="fast")        
             if not text:
                 return "EMPTY" # Trafilatura couldn't find a main article
                 
@@ -207,49 +215,97 @@ class GoogleSearchProvider(SearchProvider):
     async def search(self, query: str, max_results: int = 5) -> List[SearchResult]:
         try:
             results = []
-            print(f"🔍 Searching: {query}")
+            print(f"🔍 Searching via Google: {query}")
             
-            # Use the googlesearch library
-            search_results = list(google_search(
-                query, 
-                num_results=max_results,
-                lang="en",
-                advanced=True  # Get advanced results with titles and descriptions
-            ))
+            # Step 1: Dynamic enhancement (build advanced query string for google_search)
+            cleaned = re.sub(r'[^\w\s]', ' ', query.lower()).strip()
+            words = [w for w in cleaned.split() if len(w) >= 2]
+            key_phrases = [query]  # Exact
+            if len(words) >= 2:
+                potential_phrases = [' '.join(words[i:i+2]) for i in range(0, len(words), 2)]
+                key_phrases.extend(potential_phrases[:2])
             
-            # Extract content for each result
-            for i, result in enumerate(search_results):
-                try:
-                    credibility_score = self._calculate_credibility(result.url)
-                    
-                    # Extract content from the page
-                    content = await self.content_extractor.extract_content(result.url)
-                    
-                    # Use the actual title from search results if available
-                    title = getattr(result, 'title', f"Result from {self._get_domain(result.url)}")
-                    
-                    results.append(SearchResult(
-                        title=title,
-                        snippet=getattr(result, 'description', 'No description available'),
-                        url=result.url,
-                        content=content,
-                        credibility_score=credibility_score
-                    ))
-                    
-                    # Small delay to be respectful to servers
-                    await asyncio.sleep(1)
-                    
-                except Exception as e:
-                    print(f"❌ Failed to process {result.url}: {e}")
+            # Build enhanced query (e.g., "keyphrase1" OR "keyphrase2")
+            enhanced_parts = [f'"{phrase}"' for phrase in key_phrases[:3]]
+            enhanced_query = ' OR '.join(enhanced_parts)
+            
+            # Conditional credible sites
+            research_words = {'impact', 'effects', 'research', 'study', 'why', 'how', 'analysis'}
+            if any(word in query.lower() for word in research_words):
+                enhanced_query += ' site:.edu OR site:.gov OR site:.org OR site:un.org OR site:who.int OR site:arxiv.org'
+                print(f"📚 Research mode: Added credible site filters")
+            
+            # Recency (google_search supports 'daterange:' but rough; use num_results filter)
+            if 'recent' in query.lower() or '202' in query:
+                print("🕐 Recent mode: Limiting to fresh results")
+            
+            # Use google_search (num_results=10 for filtering)
+            search_results = list(google_search(enhanced_query, num_results=10, lang="en", advanced=True))
+            
+            success_count = 0
+            for result in search_results:
+                if success_count >= max_results:
+                    break
+                
+                url = result.url  # Note: google_search result has .url, not 'href'
+                if url.endswith('.pdf'):
                     continue
+                
+                title_lower = getattr(result, 'title', '').lower()
+                snippet_lower = getattr(result, 'description', '').lower()  # google_search uses 'description'
+                
+                # Noise filter (adapted for google_search attrs)
+                noise_indicators = {
+                    'grammar': ['grammar', 'preposition', 'verb', 'syntax'],
+                    'ad': ['buy', 'sale', 'sponsor', 'affiliate'],
+                    'spam': ['click here', 'free download', 'conspiracy']
+                }
+                skip = False
+                for category, indicators in noise_indicators.items():
+                    if any(ind in title_lower or ind in snippet_lower for ind in indicators):
+                        if not any(ind in query.lower() for ind in indicators):
+                            print(f"🚫 Skipped {category} noise: {getattr(result, 'title', 'Unknown')[:50]}")
+                            skip = True
+                            break
+                if skip:
+                    continue
+                
+                # Extract content
+                content = await self.content_extractor.extract_content(url)
+                if content in ["EMPTY"] or content.startswith("ERROR"):  # No "BLOCKED" in trafilatura
+                    print(f" 🚫 No article found at {self._get_domain(url)} (Trafilatura rejected it)")
+                    credibility = self._calculate_credibility(url)
+                    if len(results) == 0 and credibility > 0.6:
+                        print(f" ⚠️ Fallback: Using snippet for {self._get_domain(url)}")
+                        results.append(SearchResult(
+                            title=getattr(result, 'title', 'No title'),
+                            snippet=getattr(result, 'description', 'No description'),
+                            url=url,
+                            content=f"Summary: {getattr(result, 'description', '')}",
+                            credibility_score=credibility
+                        ))
+                    continue
+                
+                print(f" ✅ Scraped {len(content)} chars from {self._get_domain(url)}")
+                results.append(SearchResult(
+                    title=getattr(result, 'title', 'No title'),
+                    snippet=getattr(result, 'description', 'No description'),
+                    url=url,
+                    content=content,
+                    credibility_score=self._calculate_credibility(url)
+                ))
+                success_count += 1
+                await asyncio.sleep(1)  # Rate limit
             
+            # Filter credible (your original)
             filtered_results = self._filter_credible_results(results)
-            print(f"📊 Found {len(filtered_results)} credible results for '{query}'")
+            print(f"📊 Final Report: gathered {len(filtered_results)} sources.")
             return filtered_results
             
         except Exception as e:
-            print(f"❌ Search error for '{query}': {e}")
+            print(f"❌ Critical Search Error: {e}")
             return []
+    
     
     def _get_domain(self, url: str) -> str:
         """Extract domain from URL"""
@@ -364,6 +420,7 @@ class DuckDuckGoSearchProvider(SearchProvider):
     #     return [r for r in results if r.credibility_score > 0.4 and len(r.content) > 100]
 
 # SOLID: Dependency Inversion Principle
+# SOLID: Dependency Inversion Principle
 class ResearchBot:
     """Main ResearchBot class following Single Responsibility Principle"""
     
@@ -373,24 +430,43 @@ class ResearchBot:
         self.search_history = []
     
     async def decompose_query(self, question: str) -> Dict[str, Any]:
-        """Break down question into sub-queries using LLM"""
-        # Simple decomposition without LLM for reliability
-        words = question.lower().split()
-        key_terms = [word for word in words if len(word) > 3 and word not in ['what', 'how', 'why', 'when', 'where', 'which']]
-        
-        if len(key_terms) > 1:
+        """Fully general: Strips junk, extracts key terms, generates neutral sub-queries, LLM-refines."""
+        # Clean and split
+        cleaned = re.sub(r'[^\w\s]', ' ', question.lower()).strip()
+        words = cleaned.split()
+        # Key terms: len >=2, skip commons; favor nouns/entities (simple heuristic: cap words or long ones)
+        common = {'what', 'is', 'the', 'of', 'on', 'in', 'to', 'for', 'and', 'or', 'a', 'an', 'how', 'why', 'when', 'where', 'which'}
+        all_terms = [w for w in words if len(w) >= 2 and w not in common]
+        # Prioritize: Last 4 (focus on core topic) + dedupe
+        key_terms = list(dict.fromkeys(reversed(all_terms)))[:4]  # Reverse for last-first, unique, max 4
+        key_terms = key_terms[::-1]  # Flip back to natural order
+
+        if len(key_terms) >= 2:
+            base = ' '.join(key_terms)
             sub_queries = [
-                question,
-                f"{' '.join(key_terms)} impact effects",
-                f"{' '.join(key_terms)} research study",
-                f"{' '.join(key_terms)} recent developments"
+                question,  # Original always
+                f"{base} reasons why",      # E.g., "starship elon musk working reasons why"
+                f"{base} key impacts",      # Neutral for effects/motivations
+                f"{base} latest research developments 2023-2025"  # Time-fresh
             ]
         else:
             sub_queries = [question]
-        
+
+        # LLM sanity: Refine with full context
+        sanity_prompt = f"""Refine this list of sub-queries for in-depth research on: '{question}'.
+        Current ideas: {sub_queries}
+        Output ONLY a JSON object like: {{"sub_queries": ["query1", "query2", "query3"]}}
+        Make 2-3 focused, relevant sub-queries. Keep them concise and searchable."""
+        try:
+            refined = await self.llm.generate_json(sanity_prompt)
+            sub_queries = refined.get('sub_queries', sub_queries)[:3]
+        except Exception as e:
+            print(f"⚠️ LLM refine failed ({e}), using base sub-queries.")
+
         return {
-            "sub_queries": sub_queries[:3],  # Max 3 sub-queries
-            "reasoning": "Simple keyword-based decomposition for reliability"
+            "sub_queries": sub_queries,
+            "reasoning": f"Extracted terms: {key_terms} (base: '{base}')",
+            "raw_sub_queries": sub_queries  # Optional: Log for debug
         }
     
     async def perform_searches(self, queries: List[str]) -> List[SearchResult]:
@@ -451,10 +527,15 @@ class ResearchBot:
             # Create sources list
             sources = []
             for i, result in enumerate(results):
+                # Use urlparse directly if _get_domain missing (fallback)
+                try:
+                    domain = self.search._get_domain(result.url)
+                except AttributeError:
+                    domain = urlparse(result.url).netloc.replace('www.', '')
                 sources.append({
                     "id": i + 1,
                     "url": result.url,
-                    "description": f"{result.title} - {self.search._get_domain(result.url)}"
+                    "description": f"{result.title} - {domain}"
                 })
             
             return SynthesisResult(answer=answer, sources=sources[:8])  # Limit sources
@@ -482,7 +563,7 @@ Based on my research, here are the key findings:
 {"\n".join(key_points)}
 
 *Note: This is a summary based on available sources. For more detailed information, please check the original sources.*"""
-
+    
     async def research(self, question: str) -> Dict[str, Any]:
         """Main research workflow"""
         print(f"🔍 Researching: {question}")
@@ -582,14 +663,11 @@ async def main_async(question: str, api_key: str = None,provider: str = 'ddg', v
 
 # Simple unit test
 def test_research_bot():
-    """Basic test function"""
     print("Testing ResearchBot initialization...")
-    
-    # Test with environment variable
     if os.getenv("GOOGLE_API_KEY"):
         try:
             llm = GeminiProvider()
-            search = GoogleSearchProvider()
+            search = DuckDuckGoSearchProvider()  # <-- Swap to DDG for consistency
             bot = ResearchBot(llm, search)
             print("✅ ResearchBot initialized successfully")
             return True
@@ -597,7 +675,7 @@ def test_research_bot():
             print(f"❌ Initialization failed: {e}")
             return False
     else:
-        print("⚠️  GOOGLE_API_KEY not set - skipping full test")
+        print("⚠️ GOOGLE_API_KEY not set - skipping full test")
         return False
 
 if __name__ == "__main__":
