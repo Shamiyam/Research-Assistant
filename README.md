@@ -1,6 +1,30 @@
 # Research-Assistant
 Research Assistant That can answer anything...
 
+"""
+# ResearchBot
+
+A free, open-source research assistant using Google's Gemini AI and web search.
+
+## Setup
+
+1. Get a free Google API key from: https://makersuite.google.com/app/apikey
+2. Install dependencies:
+   ```bash
+   pip install google-generativeai googlesearch-python click python-dotenv
+
+3. Set environment variable-
+export GOOGLE_API_KEY="your_google_api_key"
+
+4. # Single question
+python research_bot.py ask "What is the impact of AI on climate change?"
+
+# Interactive mode
+python research_bot.py interactive
+
+# With API key
+python research_bot.py ask "Your question" --api-key "your_key"
+
 ## Key Improvements Made:
 
 ### 1. **Free Google-Based Tools**
