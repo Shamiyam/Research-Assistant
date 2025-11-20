@@ -486,7 +486,7 @@ class ResearchBot:
         
         print(f"🔎 Executing Search Plan: {unique_queries}")
         
-        tasks = [self.search.search(query, max_results=2) for query in unique_queries]
+        tasks = [self.search.search(query, max_results=7) for query in unique_queries]
         results_lists = await asyncio.gather(*tasks, return_exceptions=True)
         
         all_results = []
