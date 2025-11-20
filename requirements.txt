@@ -5,3 +5,5 @@ python-dotenv
 duckduckgo-search
 trafilatura
 ddgs
+fastapi
+uvicorn

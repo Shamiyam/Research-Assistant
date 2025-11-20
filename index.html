@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Research Assistant</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="chat-container">
+    <div class="chat-header">Research Assistant</div>
+    <div id="chatbox" class="chat-box"></div>
+
+    <div class="input-area">
+        <input id="userInput" type="text" placeholder="Ask anything..." />
+        <button onclick="sendMessage()">Send</button>
+    </div>
+</div>
+
+<script>
+async function sendMessage() {
+    const input = document.getElementById("userInput");
+    const chatbox = document.getElementById("chatbox");
+    const question = input.value.trim();
+    if (!question) return;
+
+    chatbox.innerHTML += `<div class='msg user-msg'>${question}</div>`;
+    input.value = "";
+
+    const responseDiv = document.createElement("div");
+    responseDiv.className = "msg bot-msg";
+    responseDiv.textContent = "Thinking...";
+    chatbox.appendChild(responseDiv);
+
+    const res = await fetch(`/api/ask?question=${encodeURIComponent(question)}`);
+    const data = await res.json();
+
+    responseDiv.textContent = data.answer || "Failed to get response";
+    chatbox.scrollTop = chatbox.scrollHeight;
+}
+</script>
+
+</body>
+</html>
