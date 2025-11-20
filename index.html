@@ -35,7 +35,7 @@ async function sendMessage() {
     const res = await fetch(`/api/ask?question=${encodeURIComponent(question)}`);
     const data = await res.json();
 
-    responseDiv.textContent = data.answer || "Failed to get response";
+    responseDiv.textContent = JSON.stringify(data.answer, null, 2);
     chatbox.scrollTop = chatbox.scrollHeight;
 }
 </script>
