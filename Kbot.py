@@ -430,48 +430,63 @@ class ResearchBot:
         self.search_history = []
     
     async def decompose_query(self, question: str) -> Dict[str, Any]:
-        """Fully general: Strips junk, extracts key terms, generates neutral sub-queries, LLM-refines."""
-        # Clean and split
-        cleaned = re.sub(r'[^\w\s]', ' ', question.lower()).strip()
-        words = cleaned.split()
-        # Key terms: len >=2, skip commons; favor nouns/entities (simple heuristic: cap words or long ones)
-        common = {'what', 'is', 'the', 'of', 'on', 'in', 'to', 'for', 'and', 'or', 'a', 'an', 'how', 'why', 'when', 'where', 'which'}
-        all_terms = [w for w in words if len(w) >= 2 and w not in common]
-        # Prioritize: Last 4 (focus on core topic) + dedupe
-        key_terms = list(dict.fromkeys(reversed(all_terms)))[:4]  # Reverse for last-first, unique, max 4
-        key_terms = key_terms[::-1]  # Flip back to natural order
+        """
+        Uses LLM to decompose the query from First Principles.
+        Analyzes intent -> Identifies Relationships -> Generates Targeted Queries.
+        """
+        
+        # FIRST PRINCIPLES PROMPT
+        # We ask the LLM to think before it searches.
+        prompt = f"""
+        You are an expert Research Planner. 
+        User Question: "{question}"
 
-        if len(key_terms) >= 2:
-            base = ' '.join(key_terms)
-            sub_queries = [
-                question,  # Original always
-                f"{base} reasons why",      # E.g., "starship elon musk working reasons why"
-                f"{base} key impacts",      # Neutral for effects/motivations
-                f"{base} latest research developments 2023-2025"  # Time-fresh
-            ]
-        else:
-            sub_queries = [question]
+        Task: Break this question down to find the exact answer. 
+        
+        CRITICAL THINKING PROCESS:
+        1. Analyze the user's intent. Are they asking for a specific fact (name, date), a concept, or recent news?
+        2. If the user connects two distinct concepts (e.g., "Son" and "Plane"), DO NOT search for them separately. Search for the RELATIONSHIP between them.
+        3. Avoid generic keywords that lead to irrelevant viral news (e.g., if asking about family, explicitly avoid "tracker" or "scandal" unless relevant).
 
-        # LLM sanity: Refine with full context
-        sanity_prompt = f"""Refine this list of sub-queries for in-depth research on: '{question}'.
-        Current ideas: {sub_queries}
-        Output ONLY a JSON object like: {{"sub_queries": ["query1", "query2", "query3"]}}
-        Make 2-3 focused, relevant sub-queries. Keep them concise and searchable."""
+        Generate 3 specific search queries in JSON format:
+        - Query 1: Direct answer search (The most probable specific search).
+        - Query 2: Contextual search (Searching for the story or relationship).
+        - Query 3: Alternative phrasing (To catch different sources).
+
+        Output ONLY valid JSON in this format:
+        {{
+            "reasoning": "Brief explanation of the strategy",
+            "sub_queries": ["query string 1", "query string 2", "query string 3"]
+        }}
+        """
+        
         try:
-            refined = await self.llm.generate_json(sanity_prompt)
-            sub_queries = refined.get('sub_queries', sub_queries)[:3]
+            # Use the LLM to generate the plan directly
+            plan = await self.llm.generate_json(prompt)
+            
+            return {
+                "sub_queries": plan.get("sub_queries", [question]),
+                "reasoning": plan.get("reasoning", "LLM Generated Plan"),
+                "raw_sub_queries": plan.get("sub_queries", [])
+            }
+            
         except Exception as e:
-            print(f"⚠️ LLM refine failed ({e}), using base sub-queries.")
+            print(f"⚠️ Planning failed ({e}), falling back to raw search.")
+            # Fallback if Gemini fails to return JSON
+            return {
+                "sub_queries": [question, f"{question} details", f"{question} explanation"],
+                "reasoning": "Fallback: Raw search",
+                "raw_sub_queries": []
+            }
 
-        return {
-            "sub_queries": sub_queries,
-            "reasoning": f"Extracted terms: {key_terms} (base: '{base}')",
-            "raw_sub_queries": sub_queries  # Optional: Log for debug
-        }
-    
     async def perform_searches(self, queries: List[str]) -> List[SearchResult]:
         """Perform parallel searches for all queries"""
-        tasks = [self.search.search(query, max_results=2) for query in queries]  # Reduced to avoid rate limits
+        # Deduplicate queries to save time/API calls
+        unique_queries = list(set(queries))
+        
+        print(f"🔎 Executing Search Plan: {unique_queries}")
+        
+        tasks = [self.search.search(query, max_results=2) for query in unique_queries]
         results_lists = await asyncio.gather(*tasks, return_exceptions=True)
         
         all_results = []
@@ -505,20 +520,20 @@ class ResearchBot:
             for i, result in enumerate(results[:6])  # Limit context length
         ])
         
+        # ENHANCED SYNTHESIS PROMPT
         prompt = f"""
-        Based on the following search results, answer this question: {question}
+        You are a professional research assistant.
         
-        Search Results:
+        User Question: {question}
+        
+        Strict Instructions:
+        1. Answer the question DIRECTLY based ONLY on the provided sources.
+        2. If the sources discuss "Jet Tracking" but the user asked about a "Son", explicitly state that the search results might be mixed but try to find the name.
+        3. Format with Markdown (Bold key terms, use bullet points).
+        4. Cite sources using [Source X].
+        
+        Search Data:
         {context}
-        
-        Guidelines:
-        - Be factual, neutral, and concise (200-400 words)
-        - Acknowledge limitations if information is insufficient
-        - Present balanced view if there are conflicts
-        - Use Markdown for readability
-        - Focus on the most relevant information
-        
-        Provide a well-structured answer:
         """
         
         try:
@@ -527,7 +542,6 @@ class ResearchBot:
             # Create sources list
             sources = []
             for i, result in enumerate(results):
-                # Use urlparse directly if _get_domain missing (fallback)
                 try:
                     domain = self.search._get_domain(result.url)
                 except AttributeError:
@@ -538,10 +552,9 @@ class ResearchBot:
                     "description": f"{result.title} - {domain}"
                 })
             
-            return SynthesisResult(answer=answer, sources=sources[:8])  # Limit sources
+            return SynthesisResult(answer=answer, sources=sources[:8])
         except Exception as e:
             print(f"❌ Synthesis failed: {e}")
-            # Fallback: create basic answer from scraped content
             fallback_answer = self._create_fallback_answer(question, results)
             return SynthesisResult(answer=fallback_answer, sources=[])
     
@@ -552,7 +565,6 @@ class ResearchBot:
         
         key_points = []
         for i, result in enumerate(results[:3]):
-            # Extract first 200 chars as key point
             content_preview = result.content[:200] + "..." if len(result.content) > 200 else result.content
             key_points.append(f"- From {result.title}: {content_preview}")
         
@@ -563,13 +575,14 @@ Based on my research, here are the key findings:
 {"\n".join(key_points)}
 
 *Note: This is a summary based on available sources. For more detailed information, please check the original sources.*"""
-    
+
     async def research(self, question: str) -> Dict[str, Any]:
         """Main research workflow"""
         print(f"🔍 Researching: {question}")
         
-        # Step 1: Query decomposition
+        # Step 1: Query decomposition (Now AI-Powered)
         decomposition = await self.decompose_query(question)
+        print(f"🧠 Planner Reasoning: {decomposition['reasoning']}")
         print(f"📋 Sub-queries: {decomposition['sub_queries']}")
         
         # Step 2: Perform searches
