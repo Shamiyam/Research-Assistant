@@ -7,7 +7,6 @@ from Kbot import ResearchBot, GeminiProvider, DuckDuckGoSearchProvider
 
 app = FastAPI()
 
-# Serve static files (CSS/JS)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/", response_class=HTMLResponse)
@@ -20,5 +19,9 @@ async def ask(question: str):
     llm = GeminiProvider()
     search = DuckDuckGoSearchProvider()
     bot = ResearchBot(llm, search)
+    
+    # This returns a dictionary: {'answer': '...', 'sources': [...]}
     result = await bot.research(question)
-    return {"answer": result}
+    
+    # FIX: Return the result directly. FastAPI converts dict to JSON automatically.
+    return result

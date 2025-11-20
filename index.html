@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <title>Research Assistant</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
 
@@ -12,7 +13,7 @@
     <div id="chatbox" class="chat-box"></div>
 
     <div class="input-area">
-        <input id="userInput" type="text" placeholder="Ask anything..." />
+        <input id="userInput" type="text" placeholder="Ask a research question..." />
         <button onclick="sendMessage()">Send</button>
     </div>
 </div>
@@ -24,18 +25,44 @@ async function sendMessage() {
     const question = input.value.trim();
     if (!question) return;
 
+    // User Message
     chatbox.innerHTML += `<div class='msg user-msg'>${question}</div>`;
     input.value = "";
 
+    // Loading Message
     const responseDiv = document.createElement("div");
     responseDiv.className = "msg bot-msg";
     responseDiv.textContent = "Thinking...";
     chatbox.appendChild(responseDiv);
+    chatbox.scrollTop = chatbox.scrollHeight;
 
-    const res = await fetch(`/api/ask?question=${encodeURIComponent(question)}`);
-    const data = await res.json();
+    try {
+        const res = await fetch(`/api/ask?question=${encodeURIComponent(question)}`);
+        const data = await res.json();
 
-    responseDiv.textContent = JSON.stringify(data.answer, null, 2);
+        // FIX 2: Use Marked to parse the AI Answer (handles bolding, lists)
+        // We expect data.answer to be the text
+        let formattedAnswer = marked.parse(data.answer || "No answer found.");
+
+        // FIX 3: Generate Source Cards if they exist
+        let sourcesHtml = "";
+        if (data.sources && data.sources.length > 0) {
+            sourcesHtml = `<div class="sources-container"><strong>Sources:</strong><div class="sources-list">`;
+            data.sources.forEach(src => {
+                // Use hostname if description is too long or empty
+                let label = src.description ? src.description.split('-')[0] : new URL(src.url).hostname;
+                sourcesHtml += `<a href="${src.url}" target="_blank" class="source-card">${label}</a>`;
+            });
+            sourcesHtml += `</div></div>`;
+        }
+
+        // Combine Answer + Sources
+        responseDiv.innerHTML = formattedAnswer + sourcesHtml;
+
+    } catch (error) {
+        responseDiv.textContent = "Error: Could not fetch response.";
+    }
+
     chatbox.scrollTop = chatbox.scrollHeight;
 }
 </script>
